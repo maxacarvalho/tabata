@@ -55,6 +55,23 @@
   .glow.prepare { background: var(--prepare); }
   .glow.idle { background: #333; }
 
+  .flash-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+    z-index: 100;
+    opacity: 0;
+    transition: opacity 0.1s;
+  }
+  .flash-overlay.active {
+    opacity: 1;
+    animation: flashFade 0.4s ease-out forwards;
+  }
+  @keyframes flashFade {
+    0% { opacity: 0.6; }
+    100% { opacity: 0; }
+  }
+
   .container {
     position: relative;
     z-index: 1;
@@ -238,6 +255,68 @@
     color: var(--muted);
   }
 
+  .toggle-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 8px;
+    border-top: 1px solid var(--surface2);
+  }
+
+  .toggle-label-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .toggle-sublabel {
+    font-size: 0.65rem;
+    color: var(--muted);
+    letter-spacing: 0.02em;
+  }
+
+  .toggle {
+    position: relative;
+    width: 52px;
+    height: 30px;
+    flex-shrink: 0;
+  }
+
+  .toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+
+  .toggle-track {
+    position: absolute;
+    cursor: pointer;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: var(--surface2);
+    border-radius: 15px;
+    transition: background 0.3s;
+  }
+
+  .toggle-track::before {
+    content: '';
+    position: absolute;
+    height: 24px;
+    width: 24px;
+    left: 3px;
+    bottom: 3px;
+    background: var(--text);
+    border-radius: 50%;
+    transition: transform 0.3s;
+  }
+
+  .toggle input:checked + .toggle-track {
+    background: var(--rest);
+  }
+
+  .toggle input:checked + .toggle-track::before {
+    transform: translateX(22px);
+  }
+
   @keyframes countPulse {
     0% { transform: translate(-50%, -50%) scale(1); }
     50% { transform: translate(-50%, -50%) scale(1.08); }
@@ -291,15 +370,29 @@
     margin-bottom: 8px;
     display: none;
   }
+
+  .mode-badge {
+    font-size: 0.7rem;
+    color: var(--rest);
+    background: rgba(48, 209, 88, 0.1);
+    border: 1px solid rgba(48, 209, 88, 0.2);
+    padding: 3px 10px;
+    border-radius: 8px;
+    margin-bottom: 4px;
+    display: none;
+    letter-spacing: 0.05em;
+  }
 </style>
 </head>
 <body>
 
 <div class="glow idle" id="glow"></div>
+<div class="flash-overlay" id="flashOverlay"></div>
 
 <div class="container">
   <h1>TABATA</h1>
   <div class="wakelock-badge" id="wakeBadge">🔒 Tela ativa</div>
+  <div class="mode-badge" id="modeBadge">♫ MODO MÚSICA — só vibração</div>
 
   <div class="phase-label" id="phaseLabel">&nbsp;</div>
 
@@ -359,6 +452,17 @@
         <button class="setting-btn" onclick="adjustSetting('countdown', 1)">+</button>
       </div>
     </div>
+
+    <div class="toggle-row">
+      <div class="toggle-label-wrap">
+        <span class="setting-label">MODO MÚSICA</span>
+        <span class="toggle-sublabel">Sem som — só vibração e flash visual</span>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="musicMode">
+        <span class="toggle-track"></span>
+      </label>
+    </div>
   </div>
 
   <div class="hint">
@@ -368,9 +472,23 @@
 </div>
 
 <script>
+let musicMode = false;
+document.getElementById('musicMode').addEventListener('change', function() {
+  musicMode = this.checked;
+});
+
+const elFlash = document.getElementById('flashOverlay');
+function triggerFlash(color) {
+  elFlash.style.background = color;
+  elFlash.classList.remove('active');
+  void elFlash.offsetWidth;
+  elFlash.classList.add('active');
+}
+
 let audioCtx = null;
 
 function ensureAudio() {
+  if (musicMode) return;
   if (!audioCtx) {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
@@ -380,41 +498,53 @@ function ensureAudio() {
 }
 
 function playTone(freq, duration, type = 'sine', volume = 0.3) {
-  if (!audioCtx) return;
-  const osc = audioCtx.createOscillator();
-  const gain = audioCtx.createGain();
-  osc.type = type;
-  osc.frequency.value = freq;
-  gain.gain.setValueAtTime(volume, audioCtx.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
-  osc.connect(gain);
-  gain.connect(audioCtx.destination);
-  osc.start();
-  osc.stop(audioCtx.currentTime + duration);
-}
-
-function beepCountdown() {
-  playTone(880, 0.15, 'sine', 0.4);
-}
-
-function beepWorkStart() {
-  playTone(1200, 0.1, 'square', 0.3);
-  setTimeout(() => playTone(1500, 0.1, 'square', 0.3), 120);
-  setTimeout(() => playTone(1800, 0.2, 'square', 0.4), 240);
-}
-
-function beepRestStart() {
-  playTone(600, 0.3, 'sine', 0.3);
-}
-
-function beepFinished() {
-  [0, 200, 400, 600, 800].forEach((delay, i) => {
-    setTimeout(() => playTone(800 + i * 200, 0.2, 'square', 0.4), delay);
-  });
+  if (musicMode || !audioCtx) return;
+  try {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = type;
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(volume, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + duration);
+  } catch(e) {}
 }
 
 function vibrate(pattern) {
   if (navigator.vibrate) navigator.vibrate(pattern);
+}
+
+function notifyCountdown() {
+  playTone(880, 0.15, 'sine', 0.4);
+  vibrate(50);
+  triggerFlash('rgba(255, 159, 10, 0.3)');
+}
+
+function notifyWorkStart() {
+  playTone(1200, 0.1, 'square', 0.3);
+  setTimeout(() => playTone(1500, 0.1, 'square', 0.3), 120);
+  setTimeout(() => playTone(1800, 0.2, 'square', 0.4), 240);
+  vibrate([100, 50, 100, 50, 100]);
+  triggerFlash('rgba(255, 59, 48, 0.4)');
+}
+
+function notifyRestStart() {
+  playTone(600, 0.3, 'sine', 0.3);
+  vibrate([200, 100, 200]);
+  triggerFlash('rgba(48, 209, 88, 0.4)');
+}
+
+function notifyFinished() {
+  [0, 200, 400, 600, 800].forEach((delay, i) => {
+    setTimeout(() => playTone(800 + i * 200, 0.2, 'square', 0.4), delay);
+  });
+  vibrate([200, 100, 200, 100, 200, 100, 400]);
+  triggerFlash('rgba(255, 59, 48, 0.5)');
+  setTimeout(() => triggerFlash('rgba(255, 59, 48, 0.4)'), 500);
+  setTimeout(() => triggerFlash('rgba(255, 59, 48, 0.3)'), 1000);
 }
 
 let wakeLock = null;
@@ -456,6 +586,7 @@ const elSettings = $('settings');
 const elRing = $('ringProgress');
 const elTimerDisplay = $('timerDisplay');
 const elFinished = $('finishedMsg');
+const elModeBadge = $('modeBadge');
 
 const circumference = 2 * Math.PI * 130;
 
@@ -535,8 +666,7 @@ function tick(now) {
   const secsLeft = Math.ceil(timeLeft / 1000);
   if (secsLeft <= config.countdown && secsLeft > 0 && !countdownBeeped.has(secsLeft)) {
     countdownBeeped.add(secsLeft);
-    beepCountdown();
-    vibrate(50);
+    notifyCountdown();
     elTimerDisplay.classList.remove('pulse');
     void elTimerDisplay.offsetWidth;
     elTimerDisplay.classList.add('pulse');
@@ -557,20 +687,17 @@ function tick(now) {
 function nextPhase() {
   if (state === 'prepare') {
     currentSet++;
-    beepWorkStart();
-    vibrate([100, 50, 100]);
+    notifyWorkStart();
     startPhase('work', config.work);
   } else if (state === 'work') {
     if (currentSet >= config.sets) {
       finish();
       return;
     }
-    beepRestStart();
-    vibrate(200);
+    notifyRestStart();
     startPhase('rest', config.rest);
   } else if (state === 'rest') {
-    beepWorkStart();
-    vibrate([100, 50, 100]);
+    notifyWorkStart();
     currentSet++;
     startPhase('work', config.work);
   }
@@ -578,16 +705,16 @@ function nextPhase() {
 
 function finish() {
   state = 'finished';
-  beepFinished();
-  vibrate([200, 100, 200, 100, 400]);
+  notifyFinished();
   updateDisplay();
   elBtnStart.textContent = 'INICIAR';
   elBtnStart.classList.remove('running');
+  elModeBadge.style.display = 'none';
   releaseWakeLock();
 }
 
 function startTimer() {
-  ensureAudio();
+  if (!musicMode) ensureAudio();
   requestWakeLock();
 
   currentSet = 0;
@@ -595,6 +722,7 @@ function startTimer() {
   elBtnReset.style.display = 'block';
   elSettings.style.display = 'none';
   elFinished.style.display = 'none';
+  elModeBadge.style.display = musicMode ? 'block' : 'none';
 
   buildDots();
   startPhase('prepare', config.countdown);
@@ -614,6 +742,7 @@ function resetTimer() {
   elBtnReset.style.display = 'none';
   elSettings.style.display = 'flex';
   elFinished.style.display = 'none';
+  elModeBadge.style.display = 'none';
 
   buildDots();
   updateDisplay();
